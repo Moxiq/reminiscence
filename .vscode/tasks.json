@@ -1,0 +1,15 @@
+{
+    "tasks": [
+        {
+            "label": "buildsh",
+            "type": "shell",
+            "command": "/bin/bash build.sh",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ],
+    "version": "2.0.0"
+}
