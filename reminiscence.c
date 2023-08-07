@@ -12,31 +12,24 @@
 
 
 const int FPS = 60;
+const char *output_name = "realout.mp4";
 
 int main(void)
 {
 
     avdevice_register_all();
-    AVFormatContext *pInputFormatContext = avformat_alloc_context();
+
+    AVFormatContext *pFormatContextIn = avformat_alloc_context();
+
     const AVInputFormat *pAVInputFormat = av_find_input_format("x11grab");
-    AVCodecContext *pAVCodexContext;
-    assert(pInputFormatContext != NULL);
-    assert(avformat_open_input(&pInputFormatContext, ":0.0+0,0", pAVInputFormat, NULL) == 0 && "Could not open input stream");
+    assert(pFormatContextIn != NULL);
+    assert(avformat_open_input(&pFormatContextIn, ":0.0+0,0", pAVInputFormat, NULL) == 0 && "Could not open input stream");
 
-
-    AVDictionary *options = NULL;
-    char fps_string[3];
-    snprintf(fps_string, sizeof(fps_string), "%d", FPS);
-
-    // Set fps
-    assert(av_dict_set(&options, "framerate", fps_string, 0) >= 0);
-    // Set preset
-    assert(av_dict_set(&options, "preset", "medium", 0) >= 0);
 
     int video_index = -1;
-    for (int i = 0; i < pInputFormatContext->nb_streams; i++)
+    for (int i = 0; i < pFormatContextIn->nb_streams; i++)
     {
-        if (pInputFormatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+        if (pFormatContextIn->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
         {
             video_index = i;
             break;
@@ -45,90 +38,193 @@ int main(void)
 
     assert(video_index >= 0 && "video_index was less than 0");
 
-
-    const AVCodec *pAVCodec = avcodec_find_decoder(pInputFormatContext->streams[video_index]->codecpar->codec_id);
+    const AVCodec *pAVCodec = avcodec_find_decoder(pFormatContextIn->streams[video_index]->codecpar->codec_id);
     assert(pAVCodec != NULL && "pAVCodec was NULL");
 
-    AVCodecContext *pCodecContext = avcodec_alloc_context3(pAVCodec);
-    assert(avcodec_parameters_to_context(pCodecContext, pInputFormatContext->streams[video_index]->codecpar) >= 0 && "Failed to create AVCodecContext");  
+    AVCodecContext *pCodecContextIn = avcodec_alloc_context3(pAVCodec);
+    assert(avcodec_parameters_to_context(pCodecContextIn, pFormatContextIn->streams[video_index]->codecpar) >= 0 && "Failed to create AVCodecContext");  
 
 
-    assert(avcodec_open2(pCodecContext, pAVCodec, NULL) == 0);
-
-
-    const AVCodec *pCodecEnc = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
-    assert(pCodecEnc != NULL);
-
-    // allocate codec context
-    AVCodecContext *pCodecCtxEnc = avcodec_alloc_context3(pCodecEnc);
-    assert(pCodecCtxEnc != NULL && "pCodecCtxEnc pointer is null!");
-
-    // put sample parameters
-    pCodecCtxEnc->bit_rate = 400000;
-    pCodecCtxEnc->width = 1400;
-    pCodecCtxEnc->height = 1050;
-    pCodecCtxEnc->time_base= (AVRational){1,25};
-    pCodecCtxEnc->gop_size = 10;
-    pCodecCtxEnc->pix_fmt = AV_PIX_FMT_YUV420P;
-    pCodecCtxEnc->max_b_frames = 2;
-	pCodecCtxEnc->time_base.num = 1;
-	pCodecCtxEnc->time_base.den = 30; // 15fps
-
-    assert(avcodec_open2(pCodecCtxEnc, pCodecEnc, NULL) >= 0);
+    assert(avcodec_open2(pCodecContextIn, pAVCodec, NULL) == 0);
+    av_dump_format(pFormatContextIn, video_index, ":0.0", 0);
 
 
     // allocate video frame
     AVFrame *pFrame = av_frame_alloc();
     assert(pFrame != NULL);
 
-    // allocate an AVFrame structure
-    AVFrame *pFrameOut = av_frame_alloc();
-    assert(pFrameOut != NULL);
+    // int err = avformat_write_header(pFormatContextOut, NULL);
+    // if (err == AVSTREAM_INIT_IN_WRITE_HEADER || AVSTREAM_INIT_IN_INIT_OUTPUT)
+    // {
+    //     printf("Wrote header\n");
+    // }
+    // else
+    // {
+    //     printf("Failed to write header\n");
+    //     return 1;
+    // }
 
-    const int ALIGN = 32;
+    // printf("Intentional exit");
+    // exit(1);
 
-    int nbytes = av_image_get_buffer_size(pCodecCtxEnc->pix_fmt, pCodecCtxEnc->width, pCodecCtxEnc->height, ALIGN); // Internet said 32
-    uint8_t* outbuffer = (uint8_t*)av_malloc(nbytes);
-    assert(outbuffer != NULL);
+    //Output stuff
+    const AVOutputFormat *pAVOutputFormat = av_guess_format(NULL, output_name, NULL);
+    assert(pAVOutputFormat != NULL);
 
-    int nbytes2 = av_image_fill_arrays(pFrameOut->data, pFrameOut->linesize, outbuffer, pCodecCtxEnc->pix_fmt, pCodecCtxEnc->width, pCodecCtxEnc->height, ALIGN);
-    assert(nbytes == nbytes2);
+    AVIOContext *pAVIOOutputContext;
+    /** Open the output file to write to it. */
+    int ret = avio_open(&pAVIOOutputContext, output_name, AVIO_FLAG_WRITE);
+    assert(ret >= 0);
+
+    AVFormatContext *pAVOutputFormatContext = avformat_alloc_context();
+    assert(pAVOutputFormatContext != NULL);
+
+    pAVOutputFormatContext->pb = pAVIOOutputContext;
+    pAVOutputFormatContext->oformat = av_guess_format(NULL, output_name, NULL);
+    assert(pAVOutputFormatContext->oformat != NULL);
+
+    AVStream *pAVOutputStream = avformat_new_stream(pAVOutputFormatContext, NULL);
+    assert(pAVOutputStream != NULL);
+
+    const AVCodec *pCodecOutput = avcodec_find_encoder(AV_CODEC_ID_H264);
+    assert(pCodecOutput != NULL);
+
+    AVCodecContext *pCodecContextOut = avcodec_alloc_context3(pCodecOutput);
+    assert(pCodecOutput != NULL);
+
+    pCodecContextOut->bit_rate = pCodecContextIn->bit_rate;
+    pCodecContextOut->width = pCodecContextIn->width;
+    pCodecContextOut->height = pCodecContextIn->height;
+    pCodecContextOut->time_base = (AVRational){1, 25};
+    pCodecContextOut->framerate = (AVRational){25, 1};
+    pCodecContextOut->gop_size = 10;
+    pCodecContextOut->max_b_frames = 1;
+    pCodecContextOut->pix_fmt = AV_PIX_FMT_YUV420P;
+    pCodecContextOut->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    ret = avcodec_parameters_from_context(pAVOutputStream->codecpar, pCodecContextOut);
+    assert(ret >= 0);
+
+    ret = avcodec_open2(pCodecContextOut, pCodecOutput, NULL);
+    assert(ret == 0);
+
+    ret = avformat_write_header(pAVOutputFormatContext, NULL);
+    if (ret == AVSTREAM_INIT_IN_WRITE_HEADER || ret == AVSTREAM_INIT_IN_INIT_OUTPUT)
+    {
+        printf("Wrote header\n");
+    }
+    else
+    {
+        printf("Failed to write header\n");
+        return 1;
+    }
 
     size_t i = 0;
     const size_t frame_limit = 100;
+    AVPacket *pAVPacketIn = av_packet_alloc();
     AVPacket *pAVPacketOut = av_packet_alloc();
-    while (av_read_frame(pInputFormatContext, pAVPacketOut) >= 0 && i++ < frame_limit)
+    
+
+    while(av_read_frame(pFormatContextIn, pAVPacketIn) >= 0 && i++ < frame_limit)
     {
-        if (pAVPacketOut->stream_index != video_index) continue;
-
-        char str[64];
-
-        int err = avcodec_send_packet(pCodecCtxEnc, pAVPacketOut);
-        assert(err == 0);
-
-        while (1)
+        if (pAVPacketIn->stream_index == video_index) 
         {
-            // There can be multiple frames in each packet? for video usually one?
-            err = avcodec_receive_frame(pCodecCtxEnc, pFrameOut);
-            if (err == AVERROR_EOF) break;
-            assert(err > 0);
+            // Send the packet to the input decoder
+            int ret = avcodec_send_packet(pCodecContextIn, pAVPacketIn);
+            if (ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) 
+            {
+                // We now have no frames left in the packet
+                printf("avcodec_send_packet: %d\n", ret);
+                break;
+            }
 
+            while (ret  >= 0) 
+            {
+                // Receive the now raw data from the decoder 
+                ret = avcodec_receive_frame(pCodecContextIn, pFrame);
+                if (ret == AVERROR(EAGAIN))
+                    break;
+                else if (ret < 0)
+                {
+                    printf("avcodec_receive_frame: %d\n", ret);
+                    return 1;
+                }
+
+                av_frame_make_writable(pFrame);
+
+                // Send raw data to the output encoder
+                ret = avcodec_send_frame(pCodecContextOut, pFrame);
+                if (ret <= 0)
+                {
+                    printf("avcodec_send_frame: %d = %s\n", ret, av_err2str(ret));
+                    return 1;
+                }
+
+                // Receive the encoded data from the encoder
+                // ret = avcodec_receive_packet(pCodecContextOut, pAVPacketOut);
+                // assert(ret == 0);
+
+                // Write the data to output file
+                
+                
+                printf("frame: %ld\n", pCodecContextIn->frame_num);
+            }
         }
-        
-
-
-        printf("Frame Counter: %zu/%zu\r", i, frame_limit); fflush(stdout);
+    
+        av_packet_unref(pAVPacketIn);
         av_packet_unref(pAVPacketOut);
     }
+    ret = av_write_trailer(pAVOutputFormatContext);
+    assert(ret == 0);
+
+    
+    // while (av_read_frame(pFormatContextIn, pAVPacket) >= 0 && i++ < frame_limit)
+    // {
+    //     if (pAVPacket->stream_index != video_index)
+    //     {
+    //         av_packet_unref(pAVPacket);
+    //         continue;
+    //     }
+    //         assert(avcodec_send_packet(pCodecContextIn, pAVPacket) == 0);
+                
+    //         printf("Packet Counter: %zu/%zu\n", i, frame_limit); fflush(stdout);
+
+    //         size_t ii = 0;
+    //         while (avcodec_receive_frame(pCodecContextIn, pFrame) == 0)
+    //         {
+    //             // Optional scaling here
+
+    //             avcodec_send_frame(pCodecContextOut, pFrame);
+
+    //             int err = avcodec_receive_packet(pCodecContextOut, pAVPacket);
+    //             printf("err=%d: %s\n", err, av_err2str(err));
+
+    //             // while (avcodec_receive_packet(pCodecContextOut, pAVPacket) == 0)
+    //             // {
+    //             //     printf("Wrote frame\n");
+    //             //     assert(av_interleaved_write_frame(pFormatContextOut, pAVPacket) == 0);
+    //             //     av_packet_unref(pAVPacket);
+    //             // }
 
 
-    av_dict_free(&options);
-    avformat_free_context(pInputFormatContext);
-    avcodec_free_context(&pCodecCtxEnc);
-    avcodec_free_context(&pCodecContext);
+    //             printf("Frame Counter: %zu\n", ++ii); fflush(stdout);
+    //         }
+
+    //     av_packet_unref(pAVPacket);
+    // }
+
+    // err = av_write_trailer(pFormatContextOut);
+    // if (err != 0)
+    // {
+    //     printf("Failed to write trailer: %s\n", av_err2str(err));
+    // }
+
+
+    avformat_free_context(pFormatContextIn);
+    avformat_free_context(pAVOutputFormatContext);
+    // avcodec_free_context(&pCodecContextOut);
+    avcodec_free_context(&pCodecContextIn);
     av_frame_free(&pFrame);
-    av_frame_free(&pFrameOut);
-    av_free(outbuffer);
     
     
     return 0;
