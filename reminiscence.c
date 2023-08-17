@@ -19,41 +19,6 @@ int main(void)
 
     avdevice_register_all();
 
-    AVFormatContext *pFormatContextIn = avformat_alloc_context();
-
-    // Set input options
-    AVDictionary *options = NULL;
-    av_dict_set(&options, "video_size", "2560x1440", 0);
-    av_dict_set(&options, "framerate", FPS, 0);
-    av_dict_set(&options, "preset", "slow", 0);
-
-    const AVInputFormat *pAVInputFormat = av_find_input_format("x11grab");
-    assert(pFormatContextIn != NULL);
-    assert(avformat_open_input(&pFormatContextIn, ":0.0+1920,0", pAVInputFormat, &options) == 0 && "Could not open input stream");
-
-
-    int video_index = -1;
-    for (int i = 0; i < pFormatContextIn->nb_streams; i++)
-    {
-        if (pFormatContextIn->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-        {
-            video_index = i;
-            break;
-        }
-    }
-
-    assert(video_index >= 0 && "video_index was less than 0");
-
-    const AVCodec *pAVCodec = avcodec_find_decoder(pFormatContextIn->streams[video_index]->codecpar->codec_id);
-    assert(pAVCodec != NULL && "pAVCodec was NULL");
-
-    AVCodecContext *pCodecContextIn = avcodec_alloc_context3(pAVCodec);
-    assert(avcodec_parameters_to_context(pCodecContextIn, pFormatContextIn->streams[video_index]->codecpar) >= 0 && "Failed to create AVCodecContext");  
-
-
-    assert(avcodec_open2(pCodecContextIn, pAVCodec, NULL) == 0);
-    av_dump_format(pFormatContextIn, video_index, ":0.0", 0);
-
     //Output stuff
     const AVOutputFormat *pAVOutputFormat = av_guess_format(NULL, output_name, NULL);
     assert(pAVOutputFormat != NULL);
@@ -76,27 +41,25 @@ int main(void)
     const AVCodec *pCodecOutput = avcodec_find_encoder(AV_CODEC_ID_H264);
     assert(pCodecOutput != NULL);
 
-    AVCodecContext *pCodecContextOut = avcodec_alloc_context3(pCodecOutput);
+    AVCodecContext *c = avcodec_alloc_context3(pCodecOutput);
     assert(pCodecOutput != NULL);
 
-    pCodecContextOut->bit_rate = pCodecContextIn->bit_rate;
-    pCodecContextOut->width = pCodecContextIn->width;
-    pCodecContextOut->height = pCodecContextIn->height;
-    pCodecContextOut->time_base = (AVRational){1, 25};
-    pCodecContextOut->framerate = (AVRational){25, 1};
-    pCodecContextOut->gop_size = 10;
-    pCodecContextOut->max_b_frames = 1;
-    pCodecContextOut->pix_fmt = AV_PIX_FMT_YUV420P;
-    pCodecContextOut->codec_type = AVMEDIA_TYPE_VIDEO;
+    /* put sample parameters */
+    c->bit_rate = 400000;
+    /* resolution must be a multiple of two */
+    c->width = 352;
+    c->height = 288;
+    /* frames per second */
+    c->time_base= (AVRational){1,25};
+    c->gop_size = 10; /* emit one intra frame every ten frames */
+    c->max_b_frames=1;
+    c->pix_fmt = AV_PIX_FMT_YUV420P;
 
-    ret = avcodec_parameters_from_context(pAVOutputStream->codecpar, pCodecContextOut);
+    ret = avcodec_parameters_from_context(pAVOutputStream->codecpar, c);
     assert(ret >= 0);
 
-    ret = avcodec_open2(pCodecContextOut, pCodecOutput, NULL);
+    ret = avcodec_open2(c, pCodecOutput, NULL);
     assert(ret == 0);
-
-    struct SwsContext *pSwsContext = sws_getContext(pCodecContextIn->width, pCodecContextIn->height, pCodecContextIn->pix_fmt, pCodecContextOut->width, pCodecContextOut->height, pCodecContextOut->pix_fmt, SWS_BICUBIC, NULL, NULL, NULL);
-    assert(pSwsContext != NULL);
 
     ret = avformat_write_header(pAVOutputFormatContext, NULL);
     if (ret == AVSTREAM_INIT_IN_WRITE_HEADER || ret == AVSTREAM_INIT_IN_INIT_OUTPUT)
@@ -109,75 +72,90 @@ int main(void)
         return 1;
     }
 
-    // allocate video frame
-    AVFrame *pFrame = av_frame_alloc();
-    assert(pFrame != NULL);
-    pFrame->format = pCodecContextOut->pix_fmt;
-    pFrame->width = pCodecContextOut->width;
-    pFrame->height = pCodecContextOut->height;
 
-    ret = av_frame_get_buffer(pFrame, 0); // This sets up the linesize correctly
+    int i, out_size, size, x, y, outbuf_size;
+    AVFrame *picture;
+    uint8_t *outbuf, *picture_buf;
+
+    picture = av_frame_alloc();
+    picture->width = 352;
+    picture->height = 288;
+    picture->format = AV_PIX_FMT_YUV420P;
+
+    ret = av_frame_get_buffer(picture, 0);
     assert(ret == 0);
 
-    size_t i = 0;
-    const size_t frame_limit = 100;
-    AVPacket *pAVPacketIn = av_packet_alloc();
+    /* alloc image and output buffer */
+
+    // picture->data[0] = picture_buf;
+    // picture->data[1] = picture->data[0] + size;
+    // picture->data[2] = picture->data[1] + size / 4;
+    // picture->linesize[0] = c->width;
+    // picture->linesize[1] = c->width / 2;
+    // picture->linesize[2] = c->width / 2;
+
+
     AVPacket *pAVPacketOut = av_packet_alloc();
-    
+    assert(pAVPacketOut != NULL);
 
-    while(av_read_frame(pFormatContextIn, pAVPacketIn) >= 0 && i++ < frame_limit)
-    {
-        if (pAVPacketIn->stream_index == video_index) 
-        {
-            // Send the packet to the input decoder
-            int ret = avcodec_send_packet(pCodecContextIn, pAVPacketIn);
-            if (ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) 
-            {
-                // We now have no frames left in the packet
-                printf("avcodec_send_packet: %d\n", ret);
-                break;
-            }
 
-            while (ret  >= 0) 
-            {
-                // Receive the now raw data from the decoder 
-                ret = avcodec_receive_frame(pCodecContextIn, pFrame);
-                if (ret == AVERROR(EAGAIN))
-                    break;
-                else if (ret < 0)
-                {
-                    printf("avcodec_receive_frame: %d\n", ret);
-                    return 1;
-                }
-
-                // sws_scale(pSwsContext, pFrame->data, pFrame->linesize, 0, pCodecContextIn->height, )
-                // av_frame_make_writable(pFrame);
-
-                // Send raw data to the output encoder
-                ret = avcodec_send_frame(pCodecContextOut, pFrame);
-                if (ret < 0)
-                {
-                    printf("avcodec_send_frame: %d = %s\n", ret, av_err2str(ret));
-                    return 1;
-                }
-
-                // Receive the encoded data from the encoder
-                // ret = avcodec_receive_packet(pCodecContextOut, pAVPacketOut);
-                // assert(ret == 0);
-
-                // Write the data to output file
-                
-                
-                printf("frame: %ld\n", pCodecContextIn->frame_num);
+    /* encode 1 second of video */
+    for(i=0;i<25;i++) {
+        fflush(stdout);
+        /* prepare a dummy image */
+        /* Y */
+        for(y=0;y<c->height;y++) {
+            for(x=0;x<c->width;x++) {
+                picture->data[0][y * picture->linesize[0] + x] = x + y + i * 3;
             }
         }
-    
-        av_packet_unref(pAVPacketIn);
-        av_packet_unref(pAVPacketOut);
-    }
-    ret = av_write_trailer(pAVOutputFormatContext);
-    assert(ret == 0);
+ 
+       /* Cb and Cr */
+        for(y=0;y<c->height/2;y++) {
+            for(x=0;x<c->width/2;x++) {
+                picture->data[1][y * picture->linesize[1] + x] = 128 + y + i * 2;
+                picture->data[2][y * picture->linesize[2] + x] = 64 + x + i * 5;
+            }
+        }
 
+        ret = avcodec_send_frame(c, picture);
+        if (ret < 0)
+        {
+            printf("avcodec_send_frame: %d = %s\n", ret, av_err2str(ret));
+            return 1;
+        }
+
+        printf("send_frame success!\n");
+
+
+        while (1)
+        {
+            ret = avcodec_receive_packet(c, pAVPacketOut);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                break;
+            else if (ret < 0)
+            {
+                printf("avcodec_receive_packet: %d = %s\n", ret, av_err2str(ret));
+                return 1;
+            }
+            printf("receive_packet success!\n");
+        }
+
+ 
+    }
+
+        av_packet_unref(pAVPacketOut);
+        av_frame_free(&picture);
+        avcodec_free_context(&c);
+
+    // Send raw data to the output encoder
+
+    // Receive the encoded data from the encoder
+    // ret = avcodec_receive_packet(pCodecContextOut, pAVPacketOut);
+    // assert(ret == 0);
+
+    // Write the data to output file
+    
     
     // while (av_read_frame(pFormatContextIn, pAVPacket) >= 0 && i++ < frame_limit)
     // {
@@ -221,11 +199,11 @@ int main(void)
     // }
 
 
-    avformat_free_context(pFormatContextIn);
-    avformat_free_context(pAVOutputFormatContext);
-    // avcodec_free_context(&pCodecContextOut);
-    avcodec_free_context(&pCodecContextIn);
-    av_frame_free(&pFrame);
+    // avformat_free_context(pFormatContextIn);
+    // avformat_free_context(pAVOutputFormatContext);
+    // // avcodec_free_context(&pCodecContextOut);
+    // avcodec_free_context(&pCodecContextIn);
+    // av_frame_free(&pFrame);
     
     
     return 0;
