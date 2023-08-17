@@ -9,9 +9,9 @@
 #include <libavformat/avformat.h>
 #include <libavdevice/avdevice.h>
 #include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
 
-
-const int FPS = 60;
+#define FPS "60"
 const char *output_name = "realout.mp4";
 
 int main(void)
@@ -21,9 +21,15 @@ int main(void)
 
     AVFormatContext *pFormatContextIn = avformat_alloc_context();
 
+    // Set input options
+    AVDictionary *options = NULL;
+    av_dict_set(&options, "video_size", "2560x1440", 0);
+    av_dict_set(&options, "framerate", FPS, 0);
+    av_dict_set(&options, "preset", "slow", 0);
+
     const AVInputFormat *pAVInputFormat = av_find_input_format("x11grab");
     assert(pFormatContextIn != NULL);
-    assert(avformat_open_input(&pFormatContextIn, ":0.0+0,0", pAVInputFormat, NULL) == 0 && "Could not open input stream");
+    assert(avformat_open_input(&pFormatContextIn, ":0.0+1920,0", pAVInputFormat, &options) == 0 && "Could not open input stream");
 
 
     int video_index = -1;
@@ -47,25 +53,6 @@ int main(void)
 
     assert(avcodec_open2(pCodecContextIn, pAVCodec, NULL) == 0);
     av_dump_format(pFormatContextIn, video_index, ":0.0", 0);
-
-
-    // allocate video frame
-    AVFrame *pFrame = av_frame_alloc();
-    assert(pFrame != NULL);
-
-    // int err = avformat_write_header(pFormatContextOut, NULL);
-    // if (err == AVSTREAM_INIT_IN_WRITE_HEADER || AVSTREAM_INIT_IN_INIT_OUTPUT)
-    // {
-    //     printf("Wrote header\n");
-    // }
-    // else
-    // {
-    //     printf("Failed to write header\n");
-    //     return 1;
-    // }
-
-    // printf("Intentional exit");
-    // exit(1);
 
     //Output stuff
     const AVOutputFormat *pAVOutputFormat = av_guess_format(NULL, output_name, NULL);
@@ -100,13 +87,16 @@ int main(void)
     pCodecContextOut->gop_size = 10;
     pCodecContextOut->max_b_frames = 1;
     pCodecContextOut->pix_fmt = AV_PIX_FMT_YUV420P;
-    pCodecContextOut->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    pCodecContextOut->codec_type = AVMEDIA_TYPE_VIDEO;
 
     ret = avcodec_parameters_from_context(pAVOutputStream->codecpar, pCodecContextOut);
     assert(ret >= 0);
 
     ret = avcodec_open2(pCodecContextOut, pCodecOutput, NULL);
     assert(ret == 0);
+
+    struct SwsContext *pSwsContext = sws_getContext(pCodecContextIn->width, pCodecContextIn->height, pCodecContextIn->pix_fmt, pCodecContextOut->width, pCodecContextOut->height, pCodecContextOut->pix_fmt, SWS_BICUBIC, NULL, NULL, NULL);
+    assert(pSwsContext != NULL);
 
     ret = avformat_write_header(pAVOutputFormatContext, NULL);
     if (ret == AVSTREAM_INIT_IN_WRITE_HEADER || ret == AVSTREAM_INIT_IN_INIT_OUTPUT)
@@ -118,6 +108,16 @@ int main(void)
         printf("Failed to write header\n");
         return 1;
     }
+
+    // allocate video frame
+    AVFrame *pFrame = av_frame_alloc();
+    assert(pFrame != NULL);
+    pFrame->format = pCodecContextOut->pix_fmt;
+    pFrame->width = pCodecContextOut->width;
+    pFrame->height = pCodecContextOut->height;
+
+    ret = av_frame_get_buffer(pFrame, 0); // This sets up the linesize correctly
+    assert(ret == 0);
 
     size_t i = 0;
     const size_t frame_limit = 100;
@@ -150,11 +150,12 @@ int main(void)
                     return 1;
                 }
 
-                av_frame_make_writable(pFrame);
+                // sws_scale(pSwsContext, pFrame->data, pFrame->linesize, 0, pCodecContextIn->height, )
+                // av_frame_make_writable(pFrame);
 
                 // Send raw data to the output encoder
                 ret = avcodec_send_frame(pCodecContextOut, pFrame);
-                if (ret <= 0)
+                if (ret < 0)
                 {
                     printf("avcodec_send_frame: %d = %s\n", ret, av_err2str(ret));
                     return 1;
