@@ -50,7 +50,7 @@ int main(void)
     c->width = 352;
     c->height = 288;
     /* frames per second */
-    c->time_base= (AVRational){1,25};
+    c->time_base= (AVRational){1,25},
     c->gop_size = 10; /* emit one intra frame every ten frames */
     c->max_b_frames=1;
     c->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -73,7 +73,7 @@ int main(void)
     }
 
 
-    int i, out_size, size, x, y, outbuf_size;
+    int out_size, size, x, y, outbuf_size;
     AVFrame *picture;
     uint8_t *outbuf, *picture_buf;
 
@@ -98,9 +98,8 @@ int main(void)
     AVPacket *pAVPacketOut = av_packet_alloc();
     assert(pAVPacketOut != NULL);
 
-
     /* encode 1 second of video */
-    for(i=0;i<25;i++) {
+    for(int i=0;i<25;i++) {
         fflush(stdout);
         /* prepare a dummy image */
         /* Y */
@@ -109,8 +108,8 @@ int main(void)
                 picture->data[0][y * picture->linesize[0] + x] = x + y + i * 3;
             }
         }
- 
-       /* Cb and Cr */
+
+    /* Cb and Cr */
         for(y=0;y<c->height/2;y++) {
             for(x=0;x<c->width/2;x++) {
                 picture->data[1][y * picture->linesize[1] + x] = 128 + y + i * 2;
@@ -138,11 +137,15 @@ int main(void)
                 printf("avcodec_receive_packet: %d = %s\n", ret, av_err2str(ret));
                 return 1;
             }
-            printf("receive_packet success!\n");
-        }
 
- 
+            ret = av_interleaved_write_frame(pAVOutputFormatContext, pAVPacketOut);
+            assert(ret == 0);
+            printf("Wrote data\n");
+        }
     }
+
+        ret = av_write_trailer(pAVOutputFormatContext);
+        assert(ret == 0);
 
         av_packet_unref(pAVPacketOut);
         av_frame_free(&picture);
