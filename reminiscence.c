@@ -12,7 +12,7 @@
 #include <libswscale/swscale.h>
 
 #define FPS "60"
-#define FRAMES 100
+#define FRAMES 500
 #define WIDTH 1920
 #define HEIGHT 1080
 
@@ -126,9 +126,10 @@ int main(void)
     int64_t time_base_num = 1;
     int64_t time_base_den = frame_rate;
 
+    fill_frame(picture); // we use static frame for now
+    
     for(int f = 0; f < FRAMES; f++) 
     {
-        fill_frame(picture);
         picture->pts = f*6000; // Not sure how to set the fps here
 
         ret = avcodec_send_frame(c, picture);
