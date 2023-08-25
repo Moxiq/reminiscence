@@ -12,12 +12,35 @@
 #include <libswscale/swscale.h>
 
 #define FPS "60"
+#define FRAMES 100
+#define WIDTH 1920
+#define HEIGHT 1080
+
 const char *output_name = "realout.mp4";
+
+void fill_frame(AVFrame *frame)
+{
+    /* prepare a dummy image */
+    /* Y */
+    for(int y=0;y<HEIGHT;y++) {
+        for(int x=0;x<WIDTH;x++) {
+            frame->data[0][y * frame->linesize[0] + x] = x + y * 3;
+        }
+    }
+
+/* Cb and Cr */
+    for(int y=0;y<HEIGHT/2;y++) {
+        for(int x=0;x<WIDTH/2;x++) {
+            frame->data[1][y * frame->linesize[1] + x] = 128 + y * 2;
+            frame->data[2][y * frame->linesize[2] + x] = 64 + x * 5;
+        }
+    }
+}
 
 int main(void)
 {
-
     avdevice_register_all();
+    av_log_set_level(AV_LOG_DEBUG);
 
     //Output stuff
     const AVOutputFormat *pAVOutputFormat = av_guess_format(NULL, output_name, NULL);
@@ -47,10 +70,11 @@ int main(void)
     /* put sample parameters */
     c->bit_rate = 400000;
     /* resolution must be a multiple of two */
-    c->width = 352;
-    c->height = 288;
+    c->width = WIDTH;
+    c->height = HEIGHT;
     /* frames per second */
     c->time_base= (AVRational){1,25},
+    c->framerate = (AVRational){25, 1},
     c->gop_size = 10; /* emit one intra frame every ten frames */
     c->max_b_frames=1;
     c->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -78,9 +102,9 @@ int main(void)
     uint8_t *outbuf, *picture_buf;
 
     picture = av_frame_alloc();
-    picture->width = 352;
-    picture->height = 288;
-    picture->format = AV_PIX_FMT_YUV420P;
+    picture->width = c->width;
+    picture->height = c->height;
+    picture->format = c->pix_fmt;
 
     ret = av_frame_get_buffer(picture, 0);
     assert(ret == 0);
@@ -98,24 +122,14 @@ int main(void)
     AVPacket *pAVPacketOut = av_packet_alloc();
     assert(pAVPacketOut != NULL);
 
-    /* encode 1 second of video */
-    for(int i=0;i<25;i++) {
-        fflush(stdout);
-        /* prepare a dummy image */
-        /* Y */
-        for(y=0;y<c->height;y++) {
-            for(x=0;x<c->width;x++) {
-                picture->data[0][y * picture->linesize[0] + x] = x + y + i * 3;
-            }
-        }
+    int frame_rate = 25; // Change this to your desired frame rate
+    int64_t time_base_num = 1;
+    int64_t time_base_den = frame_rate;
 
-    /* Cb and Cr */
-        for(y=0;y<c->height/2;y++) {
-            for(x=0;x<c->width/2;x++) {
-                picture->data[1][y * picture->linesize[1] + x] = 128 + y + i * 2;
-                picture->data[2][y * picture->linesize[2] + x] = 64 + x + i * 5;
-            }
-        }
+    for(int f = 0; f < FRAMES; f++) 
+    {
+        fill_frame(picture);
+        picture->pts = f*6000; // Not sure how to set the fps here
 
         ret = avcodec_send_frame(c, picture);
         if (ret < 0)
@@ -130,6 +144,13 @@ int main(void)
         while (1)
         {
             ret = avcodec_receive_packet(c, pAVPacketOut);
+
+            // pAVPacketOut->pts = i;
+            // pAVPacketOut->dts
+            // pAVPacketOut->duration
+            // https://ffmpeg.org/doxygen/trunk/structAVPacket.html#ab5793d8195cf4789dfb3913b7a693903
+            // pAVPacketOut->pos = -1;
+
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                 break;
             else if (ret < 0)
@@ -138,11 +159,12 @@ int main(void)
                 return 1;
             }
 
-            ret = av_interleaved_write_frame(pAVOutputFormatContext, pAVPacketOut);
+            ret = av_write_frame(pAVOutputFormatContext, pAVPacketOut);
             assert(ret == 0);
             printf("Wrote data\n");
         }
     }
+
 
         ret = av_write_trailer(pAVOutputFormatContext);
         assert(ret == 0);
@@ -150,63 +172,7 @@ int main(void)
         av_packet_unref(pAVPacketOut);
         av_frame_free(&picture);
         avcodec_free_context(&c);
-
-    // Send raw data to the output encoder
-
-    // Receive the encoded data from the encoder
-    // ret = avcodec_receive_packet(pCodecContextOut, pAVPacketOut);
-    // assert(ret == 0);
-
-    // Write the data to output file
-    
-    
-    // while (av_read_frame(pFormatContextIn, pAVPacket) >= 0 && i++ < frame_limit)
-    // {
-    //     if (pAVPacket->stream_index != video_index)
-    //     {
-    //         av_packet_unref(pAVPacket);
-    //         continue;
-    //     }
-    //         assert(avcodec_send_packet(pCodecContextIn, pAVPacket) == 0);
-                
-    //         printf("Packet Counter: %zu/%zu\n", i, frame_limit); fflush(stdout);
-
-    //         size_t ii = 0;
-    //         while (avcodec_receive_frame(pCodecContextIn, pFrame) == 0)
-    //         {
-    //             // Optional scaling here
-
-    //             avcodec_send_frame(pCodecContextOut, pFrame);
-
-    //             int err = avcodec_receive_packet(pCodecContextOut, pAVPacket);
-    //             printf("err=%d: %s\n", err, av_err2str(err));
-
-    //             // while (avcodec_receive_packet(pCodecContextOut, pAVPacket) == 0)
-    //             // {
-    //             //     printf("Wrote frame\n");
-    //             //     assert(av_interleaved_write_frame(pFormatContextOut, pAVPacket) == 0);
-    //             //     av_packet_unref(pAVPacket);
-    //             // }
-
-
-    //             printf("Frame Counter: %zu\n", ++ii); fflush(stdout);
-    //         }
-
-    //     av_packet_unref(pAVPacket);
-    // }
-
-    // err = av_write_trailer(pFormatContextOut);
-    // if (err != 0)
-    // {
-    //     printf("Failed to write trailer: %s\n", av_err2str(err));
-    // }
-
-
-    // avformat_free_context(pFormatContextIn);
-    // avformat_free_context(pAVOutputFormatContext);
-    // // avcodec_free_context(&pCodecContextOut);
-    // avcodec_free_context(&pCodecContextIn);
-    // av_frame_free(&pFrame);
+        avformat_free_context(pAVOutputFormatContext);
     
     
     return 0;
