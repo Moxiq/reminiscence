@@ -15,6 +15,8 @@
         "*.tcc": "c",
         "cinttypes": "c",
         "cstdint": "c",
-        "typeinfo": "c"
+        "typeinfo": "c",
+        "stdlib.h": "c",
+        "avcodec.h": "c"
     }
 }
