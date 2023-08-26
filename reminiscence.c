@@ -56,7 +56,7 @@ void init_input_codec()
     ret = avformat_open_input(&pFormatContextIn, ":0.0+1920,0", pAVInputFormat, &options);
     assert(ret == 0 && "Could not open input stream");
 
-    for (int i = 0; i < pFormatContextIn->nb_streams; i++)
+    for (size_t i = 0; i < pFormatContextIn->nb_streams; i++)
     {
         if (pFormatContextIn->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
         {
@@ -143,21 +143,20 @@ int get_x11_frame(AVFrame *frame)
     int ret = av_read_frame(pFormatContextIn, pAVPacketIn);
     assert(ret == 0);
 
-    if (pAVPacketIn->stream_index == video_index)
+    if (pAVPacketIn->stream_index != video_index)
+        return 1;
+    
+    // Send the packet to the input decoder
+    ret = avcodec_send_packet(pCodecContextIn, pAVPacketIn);
+    if (ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) 
     {
-        // Send the packet to the input decoder
-        int ret = avcodec_send_packet(pCodecContextIn, pAVPacketIn);
-        if (ret < 0 || ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) 
-        {
-            // We now have no frames left in the packet
-            printf("avcodec_send_packet: %d\n", ret);
-            return 1;
-        }
-        av_packet_unref(pAVPacketIn);
-
-        return avcodec_receive_frame(pCodecContextIn, frame);
-
+        // We now have no frames left in the packet
+        printf("avcodec_send_packet: %d\n", ret);
+        return 1;
     }
+    av_packet_unref(pAVPacketIn);
+
+    return avcodec_receive_frame(pCodecContextIn, frame);
 }
 
 void int_handler()
@@ -197,10 +196,8 @@ int main(void)
     }
 
 
-    int out_size, size, x, y, outbuf_size;
-    AVFrame *picture;
-    uint8_t *outbuf, *picture_buf;
 
+    AVFrame *picture;
     picture = av_frame_alloc();
     picture->width = pCodecContextOut->width;
     picture->height = pCodecContextOut->height;
