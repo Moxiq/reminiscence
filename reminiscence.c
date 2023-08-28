@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <signal.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -26,6 +28,7 @@ void init_input_codec();
 void init_output_codec();
 int get_x11_frame(AVFrame *frame);
 void int_handler();
+void *timer_thread(void *args);
 void clean_up();
 
 const char *output_name = "realout.mp4";
@@ -119,7 +122,7 @@ void init_output_codec()
     assert(pCodecOutput != NULL);
 
     /* put sample parameters */
-    pCodecContextOut->bit_rate = 10000;
+    pCodecContextOut->bit_rate = 100000;
     /* resolution must be a multiple of two */
     pCodecContextOut->width = WIDTH;
     pCodecContextOut->height = HEIGHT;
@@ -159,6 +162,23 @@ int get_x11_frame(AVFrame *frame)
     return avcodec_receive_frame(pCodecContextIn, frame);
 }
 
+void *timer_thread(void *args)
+{
+    time_t start_time = time(NULL);
+    struct tm *tm;
+    char tbuf[32];
+
+    while (1)
+    {       
+        time_t diff = time(NULL) - start_time;
+        tm = gmtime(&diff);
+        strftime(tbuf, ARRAY_SIZE(tbuf), "%H:%M:%S", tm);
+        printf("    Recording for: %s\r", tbuf);
+        fflush(stdout);
+        sleep(1);
+    }
+}
+
 void int_handler()
 {
     // Clean up
@@ -195,8 +215,6 @@ int main(void)
         return 1;
     }
 
-
-
     AVFrame *picture;
     picture = av_frame_alloc();
     picture->width = pCodecContextOut->width;
@@ -232,6 +250,10 @@ int main(void)
     
     assert(swsContext != NULL);
 
+    // Keep track of recording time
+    pthread_t timer;
+    pthread_create(&timer, NULL, timer_thread, NULL);
+
     for (int f = 0; f < FRAMES || FRAMES == 0; f++)
     {
         if (get_x11_frame(picture))
@@ -249,9 +271,6 @@ int main(void)
             return 1;
         }
 
-        // printf("send_frame success!\n");
-
-
         while (1)
         {
             ret = avcodec_receive_packet(pCodecContextOut, pAVPacketOut);
@@ -267,6 +286,8 @@ int main(void)
                 av_packet_unref(pAVPacketOut);
                 return 1;
             }
+
+            // pAVPacketOut->pts = f*2000;
 
             ret = av_write_frame(pAVOutputFormatContext, pAVPacketOut);
             assert(ret == 0);
