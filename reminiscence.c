@@ -262,7 +262,7 @@ int main(void)
         ret = sws_scale(swsContext, (const uint8_t *const *)picture->data, picture->linesize, 0, pCodecContextIn->height, scaledFrame->data, scaledFrame->linesize);
         assert(ret > 0);
 
-        scaledFrame->pts = f*2000; // Not sure how to set the fps here
+        scaledFrame->pts = (f*90000)/60; // WHY IS THE TIMEBASE 90_000?
 
         ret = avcodec_send_frame(pCodecContextOut, scaledFrame);
         if (ret < 0)
