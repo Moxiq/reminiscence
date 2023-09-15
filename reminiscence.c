@@ -30,6 +30,7 @@ int get_x11_frame(AVFrame *frame);
 void int_handler();
 void *timer_thread(void *args);
 void clean_up();
+void format_file_size(double sizeInBytes, char *res, size_t s_max);
 
 const char *output_name = "realout.mp4";
 
@@ -165,18 +166,27 @@ int get_x11_frame(AVFrame *frame)
 void *timer_thread(void *args)
 {
     time_t start_time = time(NULL);
+    FILE *f = fopen(output_name, "r");
     struct tm *tm;
     char tbuf[32];
+    char fsize_buf[32];
 
     while (1)
     {       
         time_t diff = time(NULL) - start_time;
+
         tm = gmtime(&diff);
         strftime(tbuf, ARRAY_SIZE(tbuf), "%H:%M:%S", tm);
-        printf("    Recording for: %s\r", tbuf);
+        fseek(f, 0, SEEK_END);
+        long file_size = ftell(f);
+        format_file_size((double)file_size, fsize_buf, ARRAY_SIZE(fsize_buf));
+        printf("\33[2K\r");
+        printf("    Recording for: %s, file size: %s\r", tbuf, fsize_buf);
         fflush(stdout);
         sleep(1);
     }
+
+    fclose(f);
 }
 
 void int_handler()
@@ -303,4 +313,17 @@ int main(void)
     
     
     return 0;
+}
+
+// Function to format file size
+void format_file_size(double sizeInBytes, char *res, size_t s_max) {
+    const char* units[] = {"Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"};
+    int unitIndex = 0;
+
+    while (sizeInBytes >= 1024.0 && unitIndex < 8) {
+        sizeInBytes /= 1024.0;
+        unitIndex++;
+    }
+
+    snprintf(res, s_max, "%.2f %s", sizeInBytes, units[unitIndex]);
 }
