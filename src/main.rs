@@ -11,10 +11,14 @@ const RES_Y: u32    = 1440;
 const OFFSET_X: u32 = 1920;
 const OFFSET_Y: u32 = 0;
 
+// Check this for hardware acceleration
+// https://docs.nvidia.com/video-technologies/video-codec-sdk/12.0/ffmpeg-with-nvidia-gpu/index.html
+
 fn main() {
     let ffmpeg_path = "./bin/bin/ffmpeg";
     let output_dir = "./Recordings";
-    let duration = 10;
+    let duration = 15;
+    let use_haccel = true;
 
     // Create output directory if it does not exist
     if !fs::metadata(output_dir).is_ok() {
@@ -35,21 +39,33 @@ fn main() {
 
     println!("Using audio device: {}", audio_device.description.as_ref().unwrap());
 
-    let output = Command::new(ffmpeg_path)
-        .args(["-video_size", &format!("{RES_X}x{RES_Y}")])
-        .args(["-framerate", &format!("{FPS}")])
-        .args(["-f", "x11grab"])
-        .args(["-i", &format!(":0.0+{OFFSET_X},{OFFSET_Y}")])
-        .args(["-t", &format!("{duration}")])
-        .args(["-t", &format!("{duration}")])
-        .args(["-f", "pulse"])
-        .args(["-ac", "2"])
-        .args(["-i", &format!("{}", audio_device.index)])
-        .arg(output_path)
-        .status()
-        .expect("Failure");
+    let mut cmd = Command::new(ffmpeg_path);
+    cmd.args(["-video_size", &format!("{RES_X}x{RES_Y}")]);
+    cmd.args(["-framerate", &format!("{FPS}")]);
+    cmd.args(["-f", "x11grab"]);
+    cmd.args(["-i", &format!(":0.0+{OFFSET_X},{OFFSET_Y}")]);
+    cmd.args(["-t", &format!("{duration}")]);
+    cmd.args(["-f", "pulse"]);
+    cmd.args(["-ac", "2"]);
+    cmd.args(["-i", &format!("{}", audio_device.index)]);
+    cmd.args(["-t", &format!("{duration}")]);
+    if use_haccel {
+        cmd.args(["-c:v", "h264_nvenc"]);
+    }
+    cmd.arg(output_path);
 
-    println!("Status: {}", output);
+    println!("{}", format!("{:?}", cmd).replace("\"", ""));
+
+    let child = match cmd.spawn() {
+        Ok(child) => {child},
+        Err(err) => {
+            eprintln!("Failed to execute command: {}", err);
+            return;
+        },
+    };
+
+    let output = child.wait_with_output().expect("Failure");
+    println!("{:?}", output);
 }
 
 // List user audio devices and let user pick audio device
