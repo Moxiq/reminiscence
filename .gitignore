@@ -4,3 +4,4 @@ Recordings/
 FFmpeg/
 buildffmpeg.sh
 bin/
+nv-codec-headers/

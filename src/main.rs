@@ -17,8 +17,9 @@ const OFFSET_Y: u32 = 0;
 fn main() {
     let ffmpeg_path = "./bin/bin/ffmpeg";
     let output_dir = "./Recordings";
+    let use_hwaccel = true;
+    let use_time = false;
     let duration = 15;
-    let use_haccel = true;
 
     // Create output directory if it does not exist
     if !fs::metadata(output_dir).is_ok() {
@@ -40,18 +41,19 @@ fn main() {
     println!("Using audio device: {}", audio_device.description.as_ref().unwrap());
 
     let mut cmd = Command::new(ffmpeg_path);
-    cmd.args(["-video_size", &format!("{RES_X}x{RES_Y}")]);
-    cmd.args(["-framerate", &format!("{FPS}")]);
-    cmd.args(["-f", "x11grab"]);
-    cmd.args(["-i", &format!(":0.0+{OFFSET_X},{OFFSET_Y}")]);
-    cmd.args(["-t", &format!("{duration}")]);
-    cmd.args(["-f", "pulse"]);
-    cmd.args(["-ac", "2"]);
-    cmd.args(["-i", &format!("{}", audio_device.index)]);
-    cmd.args(["-t", &format!("{duration}")]);
-    if use_haccel {
-        cmd.args(["-c:v", "h264_nvenc"]);
-    }
+        cmd.args(["-video_size", &format!("{RES_X}x{RES_Y}")]);
+        cmd.args(["-framerate", &format!("{FPS}")]);
+        cmd.args(["-f", "x11grab"]);
+        cmd.args(["-i", &format!(":0.0+{OFFSET_X},{OFFSET_Y}")]);
+    if use_time { // Video time
+        cmd.args(["-t", &format!("{duration}")]); }
+        cmd.args(["-f", "pulse"]);
+        cmd.args(["-ac", "2"]);
+        cmd.args(["-i", &format!("{}", audio_device.index)]);
+    if use_time { // Sound time
+        cmd.args(["-t", &format!("{duration}")]); }
+    if use_hwaccel { 
+        cmd.args(["-c:v", "h264_nvenc"]); }
     cmd.arg(output_path);
 
     println!("{}", format!("{:?}", cmd).replace("\"", ""));
