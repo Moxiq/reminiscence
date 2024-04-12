@@ -4,12 +4,12 @@ use pulsectl::controllers::types::DeviceInfo;
 use pulsectl::controllers::{SinkController, DeviceControl};
 use std::fs;
 use std::io;
+use x11rb::rust_connection::RustConnection;
+use x11rb::connection::Connection;
+use x11rb::errors::ReplyOrIdError;
+use x11rb::protocol::xproto::{ConnectionExt, GetGeometryReply, GetGeometryRequest, Window, AtomEnum};
 
-const FPS: u32      = 60;
-const RES_X: u32    = 2560;
-const RES_Y: u32    = 1440;
-const OFFSET_X: u32 = 1920;
-const OFFSET_Y: u32 = 0;
+const FPS: u32 = 60;
 
 // Check this for hardware acceleration
 // https://docs.nvidia.com/video-technologies/video-codec-sdk/12.0/ffmpeg-with-nvidia-gpu/index.html
@@ -17,7 +17,7 @@ const OFFSET_Y: u32 = 0;
 fn main() {
     let ffmpeg_path = "./bin/bin/ffmpeg";
     let output_dir = "./Recordings";
-    let use_hwaccel = true;
+    let use_hwaccel = false;
     let use_time = false;
     let duration = 15;
 
@@ -35,26 +35,33 @@ fn main() {
     // Full output path
     let output_path = format!("{output_dir}/{formatted_date}.mp4");
 
+    let window = get_window().expect("Invalid window");
+
+    println!("Selected window: {},{},{},{},{}", window.name, window.geometry.x, window.geometry.y, window.geometry.width, window.geometry.height);
+
     // Get audio device
     let audio_device: DeviceInfo = get_audio_device_input();
 
     println!("Using audio device: {}", audio_device.description.as_ref().unwrap());
 
     let mut cmd = Command::new(ffmpeg_path);
-        cmd.args(["-video_size", &format!("{RES_X}x{RES_Y}")]);
+        cmd.args(["-video_size", &format!("{}x{}", window.geometry.width, window.geometry.height)]);
         cmd.args(["-framerate", &format!("{FPS}")]);
         cmd.args(["-f", "x11grab"]);
-        cmd.args(["-i", &format!(":0.0+{OFFSET_X},{OFFSET_Y}")]);
+        cmd.args(["-i", &format!(":0.0+{},{}", window.geometry.x, window.geometry.y)]);
     if use_time { // Video time
-        cmd.args(["-t", &format!("{duration}")]); }
+        cmd.args(["-t", &format!("{duration}")]); 
+    }
         cmd.args(["-f", "pulse"]);
         cmd.args(["-ac", "2"]);
         cmd.args(["-i", &format!("{}", audio_device.index)]);
     if use_time { // Sound time
-        cmd.args(["-t", &format!("{duration}")]); }
+        cmd.args(["-t", &format!("{duration}")]); 
+    }
     if use_hwaccel { 
-        cmd.args(["-c:v", "h264_nvenc"]); }
-    cmd.arg(output_path);
+        cmd.args(["-c:v", "h264_nvenc"]); 
+    }
+        cmd.arg(output_path);
 
     println!("{}", format!("{:?}", cmd).replace("\"", ""));
 
@@ -102,8 +109,92 @@ fn get_audio_device_input() -> DeviceInfo {
     if index >= devices.len() {
         println!("Invalid index, choosing default audio device");
         return handler.get_default_device().expect("Failed to get default device");
-
     }
 
     devices[index].clone()
 }
+#[derive(Debug, Clone)]
+struct MyWindow {
+    name: String,
+    geometry: GetGeometryReply,
+}
+
+// Check this
+// https://unix.stackexchange.com/questions/494182/what-does-net-mean-on-x11-window-properties
+fn get_window() -> Option<MyWindow> {
+    // Establish a connection to the X server
+    let (conn, screen_num) = x11rb::connect(None).unwrap();
+    let screen = &conn.setup().roots[screen_num];
+
+    // Get the root window
+    let root_window = screen.root;
+
+    // Query the tree of windows
+    let tree = x11rb::protocol::xproto::query_tree(&conn, root_window).unwrap().reply().unwrap();
+    let mut windows: Vec<MyWindow> = Vec::new();
+
+    // Add all windows to the list
+    for window in tree.children.iter() {
+        let geometry = get_window_geometry(&conn, *window).unwrap();
+        let name = match get_window_name(&conn, *window) {
+            Some(n) => {n},
+            None => {"Unknown".to_string()},
+        };
+
+        windows.push(MyWindow { name, geometry });
+    }
+
+    println!("Select Window: ");
+    // Iterate through each window to get its geometry (coordinates)
+    for (i, window) in windows.iter().enumerate() {
+        println!("[{}] {}, {},{}, {}, {}", i+1, window.name, window.geometry.x, window.geometry.y, window.geometry.width, window.geometry.height);
+    }
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).expect("failure");
+
+    let index: usize = match input.trim().parse::<usize>() {
+        Ok(v) => v-1,
+        Err(_) => {
+            println!("Invalid input, choosing default audio device");
+            return None;
+        },
+    };
+
+    if index >= windows.len() {
+        println!("Invalid index, choosing default audio device");
+        return None;
+
+    }
+
+    Some(windows[index].clone())
+}
+
+// Helper function to get the geometry of a window
+fn get_window_geometry(
+    conn: &RustConnection,
+    window: Window,
+) -> Result<GetGeometryReply, ReplyOrIdError> {
+    let geometry = conn.get_geometry(window)?;
+    Ok(geometry.reply()?)
+}
+
+// Function to get the name of a window
+fn get_window_name(conn: &RustConnection, window: Window) -> Option<String> {
+    // Get the property
+    let prop_reply = conn
+        .get_property(false, window, AtomEnum::WM_NAME, AtomEnum::STRING, 0, u32::MAX)
+        .expect("Failed to get property")
+        .reply()
+        .expect("Failed to get property reply");
+
+    // If property exists, return its value
+    if prop_reply.value_len > 0 {
+        let prop_value = prop_reply.value;
+        let name = String::from_utf8_lossy(&prop_value).into_owned();
+        Some(name)
+    } else {
+        None
+    }
+}
+
