@@ -1,4 +1,4 @@
-use std::{process::Command};
+use std::process::Command;
 use chrono::{self, DateTime, Local};
 use pulsectl::controllers::types::DeviceInfo;
 use pulsectl::controllers::{SinkController, DeviceControl};
@@ -7,17 +7,21 @@ use std::io;
 use x11rb::rust_connection::RustConnection;
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyOrIdError;
-use x11rb::protocol::xproto::{ConnectionExt, GetGeometryReply, GetGeometryRequest, Window, AtomEnum};
+use x11rb::protocol::xproto::{ConnectionExt, GetGeometryReply, Window, AtomEnum, MapState};
 
 const FPS: u32 = 60;
 
 // Check this for hardware acceleration
 // https://docs.nvidia.com/video-technologies/video-codec-sdk/12.0/ffmpeg-with-nvidia-gpu/index.html
 
+// TODO: Some window names does not seem to render correctly, utf-8 stuff? e.g spotify
+//      Check this for how xwininfo displays name (line 470)
+//      https://github.dev/idunham/xutils/blob/master/xwininfo.c
+
 fn main() {
     let ffmpeg_path = "./bin/bin/ffmpeg";
     let output_dir = "./Recordings";
-    let use_hwaccel = false;
+    let use_hwaccel = true;
     let use_time = false;
     let duration = 15;
 
@@ -115,6 +119,7 @@ fn get_audio_device_input() -> DeviceInfo {
 }
 #[derive(Debug, Clone)]
 struct MyWindow {
+    id: u32,
     name: String,
     geometry: GetGeometryReply,
 }
@@ -134,20 +139,31 @@ fn get_window() -> Option<MyWindow> {
     let mut windows: Vec<MyWindow> = Vec::new();
 
     // Add all windows to the list
-    for window in tree.children.iter() {
-        let geometry = get_window_geometry(&conn, *window).unwrap();
-        let name = match get_window_name(&conn, *window) {
-            Some(n) => {n},
-            None => {"Unknown".to_string()},
-        };
+    for parent in tree.children.iter() {
+        let attr = conn.get_window_attributes(*parent).unwrap().reply().unwrap();
+        // Only add windows that are viewable
+        if attr.map_state != MapState::VIEWABLE {
+            continue;
+        }
 
-        windows.push(MyWindow { name, geometry });
+        // Get the recursive children of this viewable window
+        for child in get_children_rec(&conn, *parent) {
+            match get_window_name(&conn, child) {
+                // Only go through windows that has a name
+                Some(name) => {
+                    // Let the geometry be of the parent window (otherwise the offset will be 0)
+                    let geometry = get_window_geometry(&conn, *parent).unwrap();
+                    windows.push(MyWindow { id: *parent, name, geometry });
+                },
+                None => {},
+            }
+        }
     }
 
     println!("Select Window: ");
     // Iterate through each window to get its geometry (coordinates)
     for (i, window) in windows.iter().enumerate() {
-        println!("[{}] {}, {},{}, {}, {}", i+1, window.name, window.geometry.x, window.geometry.y, window.geometry.width, window.geometry.height);
+        println!("[{}] {}, {},{}, {}, {} ({})", i+1, window.name, window.geometry.x, window.geometry.y, window.geometry.width, window.geometry.height, window.id);
     }
 
     let mut input = String::new();
@@ -179,7 +195,6 @@ fn get_window_geometry(
     Ok(geometry.reply()?)
 }
 
-// Function to get the name of a window
 fn get_window_name(conn: &RustConnection, window: Window) -> Option<String> {
     // Get the property
     let prop_reply = conn
@@ -188,13 +203,29 @@ fn get_window_name(conn: &RustConnection, window: Window) -> Option<String> {
         .reply()
         .expect("Failed to get property reply");
 
-    // If property exists, return its value
-    if prop_reply.value_len > 0 {
-        let prop_value = prop_reply.value;
-        let name = String::from_utf8_lossy(&prop_value).into_owned();
-        Some(name)
-    } else {
-        None
+    // Check if we have a result
+    if prop_reply.value_len == 0 {
+        return None;
     }
+
+    Some(String::from_utf8_lossy(&prop_reply.value).into_owned())
+}
+
+
+// Recursively get all children of a window to a vector
+fn get_children_rec(conn: &RustConnection, window: Window) -> Vec<Window> {
+    // Query the tree structure to get the list of child windows
+    let tree_reply = conn.query_tree(window).unwrap().reply().unwrap();
+    let children = tree_reply.children;
+
+    // Iterate through each child window and recursively query its children
+    let mut result = Vec::new();
+    for child in children {
+        result.push(child);
+        let grandchildren = get_children_rec(conn, child);
+        result.extend(grandchildren);
+    }
+
+    result
 }
 
