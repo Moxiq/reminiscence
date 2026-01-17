@@ -4,7 +4,7 @@ const reminiscence = @import("reminiscence");
 
 const Config = struct {
     framerate: u16,
-    output_path: []const u8,
+    output_dir: []const u8,
 
     fn framerate_as_str(self: Config, allocator: std.mem.Allocator) ![]const u8 {
         return try std.fmt.allocPrint(allocator, "{}", .{self.framerate});
@@ -30,47 +30,45 @@ const Process = struct {
     }
 
     pub fn format(self: Process, writer: *std.io.Writer) !void {
-        try writer.print("process: {s}; pid: {}; wid: {}; geometry: {}", .{self.name, self.pid, self.wid, self.geometry});
+        try writer.print("{s}; pid: {}; wid: {}; geometry: {}", .{self.name, self.pid, self.wid, self.geometry});
     }
 };
+
+const NS_PER_MS: u64 = 1_000_000;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const datestr = try get_datestr(allocator);
-    defer allocator.free(datestr);
-
     const config = Config{
         .framerate = 60, 
-        .output_path = try std.fmt.allocPrint(allocator, "Recordings/{s}.mp4", .{datestr})};
+        .output_dir = "./Recordings/",
+    };
 
-    defer allocator.free(config.output_path);
-
-    var processes = try get_processes(allocator);
-    defer processes.deinit(allocator);
-    defer {
-        for (processes.items) |p| {
-            p.deinit(allocator);
+    while (true) {
+        var processes = try get_processes(allocator);
+        defer processes.deinit(allocator);
+        defer {
+            for (processes.items) |p| {
+                p.deinit(allocator);
+            }
         }
-    }
 
-    std.debug.print("Found {} process/es\n", .{processes.items.len});
-    for (processes.items) |p| {
-        std.debug.print("{f}\n", .{p});
-    }
+        if (processes.items.len > 0) {
+            std.debug.print("Found {} process/es\n", .{processes.items.len});
+            for (processes.items) |p| {
+                std.debug.print("{f}\n", .{p});
+            }
 
-    // var args = .{
-    //     "wf-recorder", 
-    //     "-f", config.output_path, 
-    //     "--framerate", try config.framerate_as_str(allocator), 
-    //     "--overwrite"
-    // };
-    // var child = std.process.Child.init(&args, allocator);
-    //
-    // try child.spawn();
-    // _ = try child.wait();
+            try start_recording(allocator, &processes.items[0], &config);
+        }
+        else {
+            std.debug.print("No processes found\n", .{});
+        }
+
+        std.Thread.sleep(1000 * NS_PER_MS);
+    }
 }
 
 fn get_datestr(allocator: std.mem.Allocator) ![]u8 {
@@ -128,4 +126,24 @@ fn get_processes(allocator: std.mem.Allocator) !std.ArrayList(Process) {
     }
 
     return processes;
+}
+
+fn start_recording(allocator: std.mem.Allocator, process: *const Process, config: *const Config) !void {
+    const datestr = try get_datestr(allocator);
+    defer allocator.free(datestr);
+
+    const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}-{s}.mp4", .{config.output_dir, process.name, datestr});
+    defer allocator.free(full_path);
+
+    std.debug.print("Recording started with process: {f}\n", .{process});
+    var args = .{
+        "wf-recorder", 
+        "-f", full_path, 
+        "--framerate", try config.framerate_as_str(allocator), 
+        "--overwrite"
+    };
+    var child = std.process.Child.init(&args, allocator);
+
+    try child.spawn();
+    _ = try child.wait();
 }
