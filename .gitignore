@@ -4,3 +4,4 @@ Recordings/
 FFmpeg/
 bin/
 nv-codec-headers/
+.zig-cache
